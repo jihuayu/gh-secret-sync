@@ -19,6 +19,7 @@ jobs:
     - run: npm i
     - run: node sync-all-repos.js
       env:
+        GITHUB_USER: jihuayu
         GITHUB_TOKEN: ${{ secrets.SYS_GITHUB_TOKEN }}
         SYNC_ALICR_USERNAME: ${{ secrets.SYNC_ALICR_USERNAME }}
         SYNC_ALICR_PASSWORD: ${{ secrets.SYNC_ALICR_PASSWORD }}
