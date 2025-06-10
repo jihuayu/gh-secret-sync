@@ -2,16 +2,18 @@
   "name": "gh-secret-sync",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "sync-all": "node sync-all-repos.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.11.0",
   "dependencies": {
-    "node-fetch": "^2.7.0",
-    "tweetsodium": "^0.0.6"
+    "libsodium-wrappers": "^0.7.15",
+    "node-fetch": "^3.3.2"
   }
 }
