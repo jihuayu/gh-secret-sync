@@ -18,11 +18,12 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: 20.x
-        cache: 'pnpm'
+        cache: 'npm'
     - run: pnpm ci
     - run: pnpm
     - run: node sync-all-repos.js
       env:
+        GITHUB_TOKEN: ${{ secrets.SYS_GITHUB_TOKEN }}
         SYNC_ALICR_USERNAME: ${{ secrets.SYNC_ALICR_USERNAME }}
         SYNC_ALICR_PASSWORD: ${{ secrets.SYNC_ALICR_PASSWORD }}
         
