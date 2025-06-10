@@ -65,15 +65,25 @@ async function getAllUserRepos() {
  */
 function getSyncSecrets() {
     const syncSecrets = Object.entries(process.env)
-        .filter(([key]) => key.startsWith('SYNC_'))
+        .filter(([key, value]) => {
+            if (!key.startsWith('SYNC_')) return false;
+            
+            // 验证secret值
+            if (!value || typeof value !== 'string' || value.trim() === '') {
+                console.warn(`警告: 跳过无效的环境变量 ${key} (值为空或无效)`);
+                return false;
+            }
+            
+            return true;
+        })
         .map(([key, value]) => ({
             name: key.replace(/^SYNC_/, ''),
-            value: value
+            value: value.trim()
         }));
     
-    console.log(`找到 ${syncSecrets.length} 个SYNC_开头的环境变量:`);
+    console.log(`找到 ${syncSecrets.length} 个有效的SYNC_开头的环境变量:`);
     syncSecrets.forEach(secret => {
-        console.log(`  - ${secret.name}: ${secret.value.substring(0, 10)}...`);
+        console.log(`  - ${secret.name}: **********`); // 不输出实际值以保护隐私
     });
     
     return syncSecrets;
@@ -84,6 +94,11 @@ function getSyncSecrets() {
  */
 async function setRepoSecret(owner, repoName, secretName, secretValue) {
     try {
+        // 验证输入参数
+        if (!secretValue || typeof secretValue !== 'string') {
+            throw new Error(`Secret值无效: ${secretName} = ${secretValue}`);
+        }
+        
         // 确保sodium已初始化
         await _sodium.ready;
         const sodium = _sodium;
@@ -97,16 +112,26 @@ async function setRepoSecret(owner, repoName, secretName, secretValue) {
         });
         
         if (!pubKeyRes.ok) {
-            throw new Error(`获取公钥失败: ${pubKeyRes.status} ${pubKeyRes.statusText}`);
+            const errorText = await pubKeyRes.text();
+            throw new Error(`获取公钥失败: ${pubKeyRes.status} ${pubKeyRes.statusText} - ${errorText}`);
         }
         
         const publicKey = await pubKeyRes.json();
         
-        // 2. 使用公钥加密secret值
-        const key = sodium.from_base64(publicKey.key);
-        const valueBytes = sodium.from_string(secretValue);
-        const encryptedBytes = sodium.crypto_box_seal(valueBytes, key);
-        const encryptedValue = sodium.to_base64(encryptedBytes);
+        // 验证公钥数据
+        if (!publicKey.key || !publicKey.key_id) {
+            throw new Error(`公钥数据无效: ${JSON.stringify(publicKey)}`);
+        }
+          // 2. 使用公钥加密secret值
+        let encryptedValue;
+        try {
+            const key = sodium.from_base64(publicKey.key);
+            const valueBytes = sodium.from_string(secretValue);
+            const encryptedBytes = sodium.crypto_box_seal(valueBytes, key);
+            encryptedValue = sodium.to_base64(encryptedBytes);
+        } catch (cryptoError) {
+            throw new Error(`加密失败: ${cryptoError.message} (secret: ${secretName}, publicKey: ${publicKey.key.substring(0, 20)}...)`);
+        }
         
         // 3. 设置或更新secret
         const secretRes = await fetch(`${API_BASE}/repos/${owner}/${repoName}/actions/secrets/${secretName}`, {
@@ -123,7 +148,8 @@ async function setRepoSecret(owner, repoName, secretName, secretValue) {
         });
         
         if (!secretRes.ok) {
-            throw new Error(`设置secret失败: ${secretRes.status} ${secretRes.statusText}`);
+            const errorText = await secretRes.text();
+            throw new Error(`设置secret失败: ${secretRes.status} ${secretRes.statusText} - ${errorText}`);
         }
         
         console.log(`  ✓ 成功设置 ${secretName}`);
@@ -147,6 +173,74 @@ async function syncSecretsForRepo(repo, secrets) {
             console.error(`  同步secret ${secret.name} 到仓库 ${repo.name} 失败:`, error.message);
             // 继续处理其他secrets，不因为一个失败而中断
         }
+    }
+}
+
+/**
+ * 测试单个仓库的连接和权限
+ */
+async function testSingleRepo(repoName, secretName, secretValue) {
+    console.log(`\n=== 测试仓库: ${repoName} ===`);
+    
+    try {
+        // 测试获取公钥
+        console.log('1. 测试获取公钥...');
+        const pubKeyRes = await fetch(`${API_BASE}/repos/${GITHUB_USER}/${repoName}/actions/secrets/public-key`, {
+            headers: { 
+                'Authorization': `token ${GITHUB_TOKEN}`,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+        
+        if (!pubKeyRes.ok) {
+            const errorText = await pubKeyRes.text();
+            console.error(`❌ 获取公钥失败: ${pubKeyRes.status} ${pubKeyRes.statusText}`);
+            console.error(`错误详情: ${errorText}`);
+            return;
+        }
+        
+        const publicKey = await pubKeyRes.json();
+        console.log(`✅ 公钥获取成功, key_id: ${publicKey.key_id}`);
+        
+        // 测试加密
+        console.log('2. 测试加密...');
+        await _sodium.ready;
+        const sodium = _sodium;
+        
+        const key = sodium.from_base64(publicKey.key);
+        const valueBytes = sodium.from_string(secretValue);
+        const encryptedBytes = sodium.crypto_box_seal(valueBytes, key);
+        const encryptedValue = sodium.to_base64(encryptedBytes);
+        
+        console.log(`✅ 加密成功, 加密后长度: ${encryptedValue.length}`);
+        
+        // 测试设置secret
+        console.log('3. 测试设置secret...');
+        const secretRes = await fetch(`${API_BASE}/repos/${GITHUB_USER}/${repoName}/actions/secrets/${secretName}`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `token ${GITHUB_TOKEN}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                encrypted_value: encryptedValue,
+                key_id: publicKey.key_id
+            })
+        });
+        
+        if (!secretRes.ok) {
+            const errorText = await secretRes.text();
+            console.error(`❌ 设置secret失败: ${secretRes.status} ${secretRes.statusText}`);
+            console.error(`错误详情: ${errorText}`);
+            return;
+        }
+        
+        console.log(`✅ 成功设置secret: ${secretName}`);
+        
+    } catch (error) {
+        console.error(`❌ 测试失败:`, error.message);
+        console.error('错误堆栈:', error.stack);
     }
 }
 
