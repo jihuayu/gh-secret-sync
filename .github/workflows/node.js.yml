@@ -9,18 +9,43 @@ on:
   pull_request:
     branches: [ "master" ]
 
+
 jobs:
-  build:
+  sync-secrets:
     runs-on: ubuntu-latest
+    
     steps:
-    - uses: actions/checkout@v4
-    - name: Use Node.js 
-      uses: actions/setup-node@v4
-    - run: npm i
-    - run: node sync-all-repos.js
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pynacl
+        
+    - name: Run secrets sync
       env:
         GITHUB_USER: jihuayu
         GITHUB_TOKEN: ${{ secrets.SYS_GITHUB_TOKEN }}
         SYNC_ALICR_USERNAME: ${{ secrets.SYNC_ALICR_USERNAME }}
         SYNC_ALICR_PASSWORD: ${{ secrets.SYNC_ALICR_PASSWORD }}
+      run: |
+        python sync_all_repos.py
         
+    - name: Notify on failure
+      if: ${{ failure() }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '⚠️ Secrets同步失败! 请检查工作流运行日志。'
+          })
+
